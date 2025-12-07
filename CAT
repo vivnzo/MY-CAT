@@ -1,0 +1,425 @@
+-- ============================
+-- Custom Speed / Jump / NoClip
+-- للاستخدام في بيئة تطوير محلية أو اختبارية فقط
+-- ============================
+
+local player = game.Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- ⚙️ الخدمات والمتغيرات الأساسية
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+
+-- 💡 متغيرات القيم الأصلية
+local DEFAULT_WALK_SPEED = 16
+local DEFAULT_JUMP_POWER = 50
+
+-- 💡 متغيرات التعزيز الافتراضية
+local BOOST_WALK_SPEED = 100
+local BOOST_JUMP_POWER = 100
+
+-- 💡 حالات
+local speedBoosted = false
+local jumpBoosted = false
+local guiHidden = true
+
+-- 🟢 نو-كليب حالة
+local noclipEnabled = false
+local noclipConnection = nil
+local originalCanCollide = {}
+
+-- 🎨 الألوان
+local COLOR_ENABLED = Color3.fromRGB(0, 170, 0)   -- أخضر (مُفعَّل)
+local COLOR_DISABLED = Color3.fromRGB(255, 85, 0) -- برتقالي (مُعطَّل)
+
+-- 🚶 دالة آمنة للحصول على Humanoid
+local function getHumanoid()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char:WaitForChild("Humanoid")
+end
+
+-- 📌 تحديد القيم الأصلية للماب
+local function setInitialValues()
+    local success, hum = pcall(getHumanoid)
+    if success and hum then
+        DEFAULT_WALK_SPEED = hum.WalkSpeed or DEFAULT_WALK_SPEED
+        DEFAULT_JUMP_POWER = hum.JumpPower or DEFAULT_JUMP_POWER
+    end
+end
+
+setInitialValues()
+
+-- 🔴 Flash Loading Screen (بدون تغيير كبير)
+local function createLoadingScreen()
+	local loadingGui = Instance.new("ScreenGui", playerGui)
+	loadingGui.Name = "LoadingFlash"
+	loadingGui.IgnoreGuiInset = true
+	loadingGui.ResetOnSpawn = false
+
+	local flash = Instance.new("Frame", loadingGui)
+	flash.Size = UDim2.new(1, 0, 1, 0)
+	flash.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+
+	local label = Instance.new("TextLabel", flash)
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.Text = "LOADING..."
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+
+	for i = 1, 3 do
+		flash.BackgroundTransparency = 1
+		task.wait(0.1)
+		flash.BackgroundTransparency = 0
+		task.wait(0.1)
+	end
+    
+    local fadeOutInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local flashTween = TweenService:Create(flash, fadeOutInfo, {BackgroundTransparency = 1})
+    local labelTween = TweenService:Create(label, fadeOutInfo, {TextTransparency = 1})
+
+    flashTween:Play()
+    labelTween:Play()
+    
+    flashTween.Completed:Wait()
+
+	loadingGui:Destroy()
+end
+
+createLoadingScreen()
+
+-- 🧱 GUI Setup
+local gui = Instance.new("ScreenGui", playerGui)
+gui.Name = "SpeedJumpBoostUI"
+gui.ResetOnSpawn = false
+gui.Enabled = false -- يبدأ مخفي
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 250, 0, 300)
+frame.Position = UDim2.new(0, 50, 0, 100)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.Active = true
+frame.Draggable = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0.12, 0)
+title.Position = UDim2.new(0, 0, 0.03, 0)
+title.Text = "Custom Speed & Jump"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+
+-- 📌 عرض القيم الأصلية للماب
+local defaultSpeedLabel = Instance.new("TextLabel", frame)
+defaultSpeedLabel.Size = UDim2.new(1, 0, 0.08, 0)
+defaultSpeedLabel.Position = UDim2.new(0, 0, 0.18, 0)
+defaultSpeedLabel.Text = "Default Speed: " .. DEFAULT_WALK_SPEED
+defaultSpeedLabel.TextColor3 = Color3.fromRGB(170, 170, 170) 
+defaultSpeedLabel.BackgroundTransparency = 1
+defaultSpeedLabel.Font = Enum.Font.Gotham
+defaultSpeedLabel.TextSize = 14
+
+local defaultJumpLabel = Instance.new("TextLabel", frame)
+defaultJumpLabel.Size = UDim2.new(1, 0, 0.08, 0)
+defaultJumpLabel.Position = UDim2.new(0, 0, 0.25, 0)
+defaultJumpLabel.Text = "Default Jump: " .. DEFAULT_JUMP_POWER
+defaultJumpLabel.TextColor3 = Color3.fromRGB(170, 170, 170) 
+defaultJumpLabel.BackgroundTransparency = 1
+defaultJumpLabel.Font = Enum.Font.Gotham
+defaultJumpLabel.TextSize = 14
+
+-- 📝 صناديق الإدخال للسرعة والقفز
+local speedInputLabel = Instance.new("TextLabel", frame)
+speedInputLabel.Size = UDim2.new(0.3, 0, 0.08, 0)
+speedInputLabel.Position = UDim2.new(0.05, 0, 0.35, 0)
+speedInputLabel.Text = "Speed:"
+speedInputLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedInputLabel.BackgroundTransparency = 1
+speedInputLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local speedInput = Instance.new("TextBox", frame)
+speedInput.Name = "SpeedInput"
+speedInput.Size = UDim2.new(0.35, 0, 0.08, 0)
+speedInput.Position = UDim2.new(0.35, 0, 0.35, 0)
+speedInput.Text = tostring(BOOST_WALK_SPEED)
+speedInput.PlaceholderText = "100"
+speedInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+speedInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedInput.TextScaled = true
+speedInput.ClearTextOnFocus = false
+Instance.new("UICorner", speedInput).CornerRadius = UDim.new(0, 8)
+
+local speedToggle = Instance.new("TextButton", frame)
+speedToggle.Name = "SpeedToggle"
+speedToggle.Size = UDim2.new(0.2, 0, 0.08, 0)
+speedToggle.Position = UDim2.new(0.75, 0, 0.35, 0)
+speedToggle.Text = "OFF"
+speedToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedToggle.BackgroundColor3 = COLOR_DISABLED 
+speedToggle.Font = Enum.Font.GothamBold
+speedToggle.TextScaled = true
+Instance.new("UICorner", speedToggle).CornerRadius = UDim.new(0, 8)
+
+-- 📝 القفز (Jump Power)
+local jumpInputLabel = Instance.new("TextLabel", frame)
+jumpInputLabel.Size = UDim2.new(0.3, 0, 0.08, 0)
+jumpInputLabel.Position = UDim2.new(0.05, 0, 0.48, 0)
+jumpInputLabel.Text = "Jump:"
+jumpInputLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpInputLabel.BackgroundTransparency = 1
+jumpInputLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local jumpInput = Instance.new("TextBox", frame)
+jumpInput.Name = "JumpInput"
+jumpInput.Size = UDim2.new(0.35, 0, 0.08, 0)
+jumpInput.Position = UDim2.new(0.35, 0, 0.48, 0)
+jumpInput.Text = tostring(BOOST_JUMP_POWER)
+jumpInput.PlaceholderText = "100"
+jumpInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+jumpInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpInput.TextScaled = true
+jumpInput.ClearTextOnFocus = false
+Instance.new("UICorner", jumpInput).CornerRadius = UDim.new(0, 8)
+
+local jumpToggle = Instance.new("TextButton", frame)
+jumpToggle.Name = "JumpToggle"
+jumpToggle.Size = UDim2.new(0.2, 0, 0.08, 0)
+jumpToggle.Position = UDim2.new(0.75, 0, 0.48, 0)
+jumpToggle.Text = "OFF"
+jumpToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpToggle.BackgroundColor3 = COLOR_DISABLED 
+jumpToggle.Font = Enum.Font.GothamBold
+jumpToggle.TextScaled = true
+Instance.new("UICorner", jumpToggle).CornerRadius = UDim.new(0, 8)
+
+-- 🔘 زر NoClip (يوجد أسفل)
+local noclipToggle = Instance.new("TextButton", frame)
+noclipToggle.Name = "NoClipToggle"
+noclipToggle.Size = UDim2.new(0.9, 0, 0.08, 0)
+noclipToggle.Position = UDim2.new(0.05, 0, 0.78, 0)
+noclipToggle.Text = "Noclip: OFF"
+noclipToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+noclipToggle.BackgroundColor3 = COLOR_DISABLED
+noclipToggle.Font = Enum.Font.GothamBold
+noclipToggle.TextScaled = true
+Instance.new("UICorner", noclipToggle).CornerRadius = UDim.new(0, 8)
+
+-- 🔥 تحديث القيم من صناديق الإدخال
+local function updateBoostValues()
+    local newSpeed = tonumber(speedInput.Text)
+    local newJump = tonumber(jumpInput.Text)
+    
+    if newSpeed and newSpeed > 0 then
+        BOOST_WALK_SPEED = newSpeed
+    end
+    
+    if newJump and newJump > 0 then
+        BOOST_JUMP_POWER = newJump
+    end
+end
+
+-- 🔥 تطبيق/إزالة سرعة معينة
+local function applySpeed()
+    updateBoostValues()
+    local success, hum = pcall(getHumanoid)
+    if success and hum then
+        pcall(function() hum.WalkSpeed = BOOST_WALK_SPEED end)
+    end
+end
+
+local function removeSpeed()
+    local success, hum = pcall(getHumanoid)
+    if success and hum then
+        pcall(function() hum.WalkSpeed = DEFAULT_WALK_SPEED end)
+    end
+end
+
+-- 🔥 تطبيق/إزالة قوة قفز معينة
+local function applyJump()
+    updateBoostValues()
+    local success, hum = pcall(getHumanoid)
+    if success and hum then
+        pcall(function() hum.JumpPower = BOOST_JUMP_POWER end)
+    end
+end
+
+local function removeJump()
+    local success, hum = pcall(getHumanoid)
+    if success and hum then
+        pcall(function() hum.JumpPower = DEFAULT_JUMP_POWER end)
+    end
+end
+
+-- 🔘 منطق تبديل السرعة
+speedToggle.MouseButton1Click:Connect(function()
+    speedBoosted = not speedBoosted
+    if speedBoosted then
+        applySpeed()
+        speedToggle.Text = "ON"
+        speedToggle.BackgroundColor3 = COLOR_ENABLED
+    else
+        removeSpeed()
+        speedToggle.Text = "OFF"
+        speedToggle.BackgroundColor3 = COLOR_DISABLED
+    end
+end)
+
+-- 🔘 منطق تبديل القفز
+jumpToggle.MouseButton1Click:Connect(function()
+    jumpBoosted = not jumpBoosted
+    if jumpBoosted then
+        applyJump()
+        jumpToggle.Text = "ON"
+        jumpToggle.BackgroundColor3 = COLOR_ENABLED
+    else
+        removeJump()
+        jumpToggle.Text = "OFF"
+        jumpToggle.BackgroundColor3 = COLOR_DISABLED
+    end
+end)
+
+-- 💡 ربط FocusLost لضمان تحديث القيم فوراً
+speedInput.FocusLost:Connect(function()
+    updateBoostValues()
+    if speedBoosted then applySpeed() end
+end)
+
+jumpInput.FocusLost:Connect(function()
+    updateBoostValues()
+    if jumpBoosted then applyJump() end
+end)
+
+-- ⌨️ منطق فتح/إغلاق الواجهة بزر ALT
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    local isTyping = speedInput:IsFocused() or jumpInput:IsFocused()
+    if gameProcessedEvent and not isTyping then return end
+    
+    if input.KeyCode == Enum.KeyCode.LeftAlt or input.KeyCode == Enum.KeyCode.RightAlt then
+        guiHidden = not guiHidden
+        gui.Enabled = not guiHidden
+    end
+end)
+
+-- 🛡️ وظيفة تأمين القيم (تتعامل مع كل خاصية بمفردها)
+local function setupBoostSecurity()
+    local success, hum = pcall(getHumanoid)
+    if not success or not hum then return end
+
+    -- تأمين WalkSpeed
+    hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if speedBoosted and hum.WalkSpeed ~= BOOST_WALK_SPEED then
+            pcall(function() hum.WalkSpeed = BOOST_WALK_SPEED end)
+        end
+    end)
+    
+    -- تأمين JumpPower
+    hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
+        if jumpBoosted and hum.JumpPower ~= BOOST_JUMP_POWER then
+            pcall(function() hum.JumpPower = BOOST_JUMP_POWER end)
+        end
+    end)
+end
+
+-- =========================
+-- NoClip: وظايف الحفظ/الاستعادة والتفعيل/الإيقاف
+-- =========================
+
+local function saveOriginalCanCollide(character)
+    originalCanCollide = {}
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            -- تخزين المرجع والحالة الأصلية
+            originalCanCollide[part] = part.CanCollide
+        end
+    end
+end
+
+local function restoreOriginalCanCollide()
+    for part, val in pairs(originalCanCollide) do
+        if part and part.Parent then
+            pcall(function() part.CanCollide = val end)
+        end
+    end
+    originalCanCollide = {}
+end
+
+local function enableNoclip()
+    local char = player.Character
+    if not char then return end
+
+    saveOriginalCanCollide(char)
+
+    -- Hook إلى Stepped ليتم إجبار CanCollide = false كل فريم
+    noclipConnection = RunService.Stepped:Connect(function()
+        local c = player.Character
+        if not c then return end
+        for _, part in ipairs(c:GetDescendants()) do
+            if part:IsA("BasePart") then
+                pcall(function() part.CanCollide = false end)
+            end
+        end
+    end)
+end
+
+local function disableNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    restoreOriginalCanCollide()
+end
+
+noclipToggle.MouseButton1Click:Connect(function()
+    noclipEnabled = not noclipEnabled
+    if noclipEnabled then
+        noclipToggle.Text = "Noclip: ON"
+        noclipToggle.BackgroundColor3 = COLOR_ENABLED
+        enableNoclip()
+    else
+        noclipToggle.Text = "Noclip: OFF"
+        noclipToggle.BackgroundColor3 = COLOR_DISABLED
+        disableNoclip()
+    end
+end)
+
+-- ♻️ إعادة تطبيق بعد الموت / دخول شخصية جديدة والتأكد من إعدادات الأمان و/أو النوكليب
+player.CharacterAdded:Connect(function(char)
+	task.wait(0.5) -- مهلة قصيرة لتهيئة الأجزاء
+    setInitialValues()
+
+    -- تحديث عرض القيم الأصلية في الواجهة
+    defaultSpeedLabel.Text = "Default Speed: " .. DEFAULT_WALK_SPEED
+    defaultJumpLabel.Text = "Default Jump: " .. DEFAULT_JUMP_POWER
+
+    setupBoostSecurity()
+
+    -- إعادة تطبيق تعزيزات إن كانت مفعلّة
+	if speedBoosted then applySpeed() end
+    if jumpBoosted then applyJump() end
+
+    -- نو-كليب: إعادة تشغيل أو تنظيف حسب الحالة
+    if noclipEnabled then
+        disableNoclip() -- تنظيف أي حالة قديمة
+        enableNoclip()  -- ثم تفعيل على الشخصية الجديدة
+    else
+        restoreOriginalCanCollide()
+    end
+end)
+
+-- التأكد من إعداد التأمين للمرة الأولى
+setupBoostSecurity()
+
+-- تنظيف عند إغلاق اللعبة (قد لا يعمل في كل البيئات المحلية، لكن محاولة جيدة)
+if game:IsA("DataModel") and game.BindToClose then
+    pcall(function()
+        game:BindToClose(function()
+            disableNoclip()
+        end)
+    end)
+end
+
+-- نهاية السكربت
